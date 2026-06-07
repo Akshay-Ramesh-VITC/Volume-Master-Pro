@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Volume Master Pro</title>
+<style>
+.root{display:block}
+body{font-family:Inter,Arial,sans-serif;padding:16px;width:340px;background:#0b1220;color:#e6eef8}
+/* Make popup appear as a rounded card */
+body::before{content:"";position:fixed;inset:0;border-radius:14px;pointer-events:none}
+body{border-radius:12px;box-shadow:0 8px 30px rgba(2,6,23,0.6);overflow:hidden}
+
+/* Smooth transitions */
+button, .tab-item, input[type=range] {transition:all 180ms cubic-bezier(.2,.8,.2,1)}
+.tab-list{margin-top:12px;max-height:140px;overflow:auto;display:flex;flex-direction:column;gap:6px;padding-right:4px}
+.tab-item{display:flex;align-items:center;gap:8px;padding:6px;border-radius:6px;background:rgba(255,255,255,0.01);cursor:pointer}
+.tab-item.selected{outline:2px solid rgba(37,99,235,0.9);background:linear-gradient(90deg, rgba(37,99,235,0.06), rgba(37,99,235,0.03))}
+.tab-item:hover{transform:translateY(-1px);background:rgba(255,255,255,0.02)}
+.tab-fav{width:20px;height:20px;border-radius:4px;object-fit:cover}
+.tab-title{flex:1;font-size:13px;color:#cfe7ff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tab-vol{font-weight:600;color:#e6eef8;font-size:12px}
+.header{display:flex;align-items:center;justify-content:space-between}
+h2{margin:0;font-size:16px}
+.controls{margin-top:12px}
+input[type=range]{-webkit-appearance:none;width:100%;height:10px;background:linear-gradient(90deg,#111827, #374151);border-radius:6px;outline:none}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:#e6eef8;border:3px solid #0b1220;box-shadow:0 2px 6px rgba(0,0,0,0.35)}
+.label{display:flex;align-items:center;justify-content:space-between;margin-top:8px}
+.value{font-weight:700;color:#e6eef8}
+.buttons{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px}
+.btn{padding:8px;border-radius:6px;border:none;background:#111827;color:#e6eef8;cursor:pointer;font-size:13px}
+.btn.secondary{background:transparent;border:1px solid #2b3440;color:#cbd5e1}
+.btn:hover{transform:translateY(-1px);filter:brightness(1.05)}
+.btn.secondary:hover{background:rgba(255,255,255,0.02)}
+.hint{font-size:12px;color:#9fb0c8;margin-top:8px}
+.controls-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:8px}
+.small{font-size:12px;color:#9fb0c8}
+.checkbox{display:flex;align-items:center;gap:6px}
+</style>
+</head>
+<body>
+<div class="header">
+	<div style="display:flex;align-items:center;gap:10px">
+		<img src="icon48.png" alt="Volume Master" style="width:28px;height:28px;border-radius:6px">
+		<h2 style="margin:0">Volume Master Pro</h2>
+	</div>
+	<div style="display:flex;align-items:center;gap:8px">
+		<div class="value" id="value">100%</div>
+		<button id="settingsBtn" class="btn secondary" title="Settings">⚙️</button>
+	</div>
+</div>
+<div id="tabList" class="tab-list" role="list" aria-label="Open tabs"></div>
+
+<div class="controls">
+	<input type="range" min="0" max="600" value="100" id="slider">
+	<div class="label"><div>Boost</div><div id="raw">1.00×</div></div>
+	<div class="buttons">
+		<button class="btn secondary" id="dec">-10%</button>
+		<button class="btn secondary" id="inc">+10%</button>
+		<button class="btn secondary" id="mute">Mute</button>
+		<button class="btn" id="preview">Preview</button>
+	</div>
+	<div class="controls-row">
+		<div class="checkbox"><input type="checkbox" id="autosave" checked><label for="autosave" class="small">Save per-tab</label></div>
+		<div style="display:flex;gap:8px;align-items:center"><button class="btn secondary" id="normalize">Normalize</button><button class="btn secondary" id="reset">Reset</button></div>
+	</div>
+	<div class="hint">Tip: 100% is normal. Above 100% applies pre-boost + soft clipping.</div>
+</div>
+
+<!-- Settings pane (hidden by default) -->
+<section id="settingsPane" style="display:none;margin-top:12px;padding:10px;border-radius:8px;background:rgba(255,255,255,0.02)">
+	<h3 style="margin:0 0 8px 0">Settings</h3>
+	<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+		<input type="checkbox" id="darkModeToggle"><label for="darkModeToggle" class="small">Dark mode</label>
+	</div>
+	<div style="margin-bottom:8px">
+		<strong style="font-size:13px">Equalizer</strong>
+		<div style="margin-top:6px">
+			<select id="eqAlgo" style="width:100%;margin-bottom:6px">
+				<option value="lowpass">Lowpass</option>
+				<option value="highpass">Highpass</option>
+				<option value="bandpass">Bandpass</option>
+				<option value="lowshelf">Lowshelf</option>
+				<option value="highshelf">Highshelf</option>
+				<option value="peaking">Peaking</option>
+				<option value="notch">Notch</option>
+				<option value="allpass">Allpass</option>
+			</select>
+			<input id="eqFreq" type="range" min="20" max="20000" value="440" step="1" style="width:100%">
+			<div style="display:flex;justify-content:space-between;font-size:12px;color:#9fb0c8"><span>20Hz</span><span id="eqFreqVal">440</span><span>20kHz</span></div>
+			<input id="eqQ" type="range" min="0.1" max="20" value="1" step="0.1" style="width:100%">
+			<div style="display:flex;justify-content:space-between;font-size:12px;color:#9fb0c8"><span>Q</span><span id="eqQVal">1</span></div>
+			<input id="eqGain" type="range" min="-24" max="24" value="0" step="0.5" style="width:100%">
+			<div style="display:flex;justify-content:space-between;font-size:12px;color:#9fb0c8"><span>-24dB</span><span id="eqGainVal">0</span><span>+24dB</span></div>
+		</div>
+	</div>
+</section>
+<script src="popup.js"></script>
+</body>
+</html>
