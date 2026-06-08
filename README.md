@@ -36,13 +36,6 @@ Volume Master Pro is a small Chrome/Edge extension that lets you boost and contr
 - To update content scripts or popup code, edit the files and reload the extension page or click the reload icon in the Extensions page.
 - For debugging service worker logs, open `chrome://serviceworker-internals` or use the Extensions page "Inspect views" link (if available).
 
-## Troubleshooting
-- If audio controls do not work on a particular site, that site may use non-standard audio APIs or block script injection.
-- Ensure the extension has the necessary host permissions for that site.
-
-## License
-Include your preferred license or keep it proprietary.
-
 ---
 
 If you want, I can also:
