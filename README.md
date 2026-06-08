@@ -35,10 +35,3 @@ Volume Master Pro is a small Chrome/Edge extension that lets you boost and contr
 ## Development
 - To update content scripts or popup code, edit the files and reload the extension page or click the reload icon in the Extensions page.
 - For debugging service worker logs, open `chrome://serviceworker-internals` or use the Extensions page "Inspect views" link (if available).
-
----
-
-If you want, I can also:
-- Add a short CHANGELOG.md
-- Create a minimal `package.json` or build scripts
-- Add screenshots and icons
