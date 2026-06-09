@@ -75,10 +75,21 @@ chrome.runtime.onMessage.addListener(async (msg, sender) => {
 			if (msg.q !== undefined) forward.q = msg.q;
 			if (msg.gain !== undefined) forward.gain = msg.gain;
 
+			// sendMessage may return a Promise that rejects if no receiver exists
+			// handle both promise and callback styles to avoid unhandled rejections
 			try {
-				chrome.runtime.sendMessage(forward);
+				const maybePromise = chrome.runtime.sendMessage(forward, (resp) => {
+					if (chrome.runtime.lastError) {
+						console.warn('Forward to offscreen no receiver (callback):', chrome.runtime.lastError.message);
+					}
+				});
+				if (maybePromise && typeof maybePromise.then === 'function') {
+					maybePromise.catch(e => {
+						console.warn('Forward to offscreen failed (promise):', e && e.message ? e.message : e);
+					});
+				}
 			} catch (e) {
-				console.warn('Forward to offscreen failed', e && e.message ? e.message : e);
+				console.warn('Forward to offscreen failed (sync):', e && e.message ? e.message : e);
 			}
 		}
 	} catch (outer) {
@@ -90,7 +101,19 @@ chrome.runtime.onMessage.addListener(async (msg, sender) => {
 chrome.tabs.onRemoved.addListener(async (tabId) => {
 	try {
 		await ensureOffscreen();
-		chrome.runtime.sendMessage({ action: ACTION_TAB_CLOSED, target: TARGET_OFFSCREEN, tabId });
+		// runtime.sendMessage can reject if no receiver exists; handle gracefully
+		try {
+			const maybePromise = chrome.runtime.sendMessage({ action: ACTION_TAB_CLOSED, target: TARGET_OFFSCREEN, tabId }, (resp) => {
+				if (chrome.runtime.lastError) {
+					// nothing to do if offscreen isn't present
+				}
+			});
+			if (maybePromise && typeof maybePromise.then === 'function') {
+				maybePromise.catch(()=>{});
+			}
+		} catch (e) {
+			// ignore failures
+		}
 	} catch (e) {
 		// ignore
 	}

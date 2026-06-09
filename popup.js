@@ -22,28 +22,87 @@ const eqGainVal = document.getElementById('eqGainVal');
 let currentTabId = null;
 let isMuted = false;
 let isNormalized = false;
+let currentDomain = null;
 
 function updateUI(vol){
   value.textContent = vol + "%";
   raw.textContent = (vol/100).toFixed(2) + "×";
 }
 
+// Helper to send messages to a tab safely (handles missing receiver)
+function safeSendMessage(tabId, message, cb){
+  try{
+    chrome.tabs.sendMessage(tabId, message, res => {
+      if(chrome.runtime.lastError){
+        const errMsg = chrome.runtime.lastError.message || '';
+        // If no receiver exists, try injecting the content script (for pages where it wasn't present)
+        if(errMsg.includes('Receiving end does not exist') || errMsg.includes('Could not establish connection')){
+          // ensure we only inject into http(s) pages
+          chrome.tabs.get(tabId, tab => {
+            const url = tab && tab.url ? tab.url : '';
+            if(!/^(https?:)/.test(url)){
+              if(cb) cb(null, chrome.runtime.lastError);
+              return;
+            }
+            // attempt to (re)inject content script
+            try{
+              chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] }).then(()=>{
+                // retry sending message once
+                chrome.tabs.sendMessage(tabId, message, res2 => {
+                  if(chrome.runtime.lastError){ if(cb) cb(null, chrome.runtime.lastError); return; }
+                  if(cb) cb(res2);
+                });
+              }).catch(injectErr => { if(cb) cb(null, injectErr); });
+            }catch(injectSyncErr){ if(cb) cb(null, injectSyncErr); }
+          });
+          return;
+        }
+        if(cb) cb(null, chrome.runtime.lastError);
+        return;
+      }
+      if(cb) cb(res);
+    });
+  } catch(e){
+    if(cb) cb(null, e);
+  }
+}
+
 function sendVolume(vol, tabId){
   const sendTo = tabId || currentTabId;
   if(!sendTo) return;
-  chrome.tabs.sendMessage(sendTo,{
+  safeSendMessage(sendTo,{
     type: "SET_VOLUME",
     volume: Number(vol)
   });
   if(autosave.checked){
-    const key = `vol_tab_${sendTo}`;
-    const payload = {};
-    payload[key] = Number(vol);
-    chrome.storage.local.set(payload);
+    // prefer saving by domain so settings persist across tab ids
+    chrome.tabs.get(sendTo, tab => {
+      try{
+        const hostname = tab && tab.url ? new URL(tab.url).hostname : null;
+        const key = hostname ? `vol_domain_${hostname}` : `vol_tab_${sendTo}`;
+        const payload = {};
+        payload[key] = Number(vol);
+        chrome.storage.local.set(payload);
+      } catch(e){
+        const key = `vol_tab_${sendTo}`;
+        const payload = {};
+        payload[key] = Number(vol);
+        chrome.storage.local.set(payload);
+      }
+    });
   }
   else {
-    const key = `vol_tab_${sendTo}`;
-    chrome.storage.local.remove(key);
+    // remove domain key if possible, fall back to tab key
+    chrome.tabs.get(sendTo, tab => {
+      try{
+        const hostname = tab && tab.url ? new URL(tab.url).hostname : null;
+        const key = hostname ? `vol_domain_${hostname}` : `vol_tab_${sendTo}`;
+        chrome.storage.local.remove(key);
+      } catch(e){
+        const key = `vol_tab_${sendTo}`;
+        chrome.storage.local.remove(key);
+      }
+    });
   }
 }
 
@@ -51,44 +110,57 @@ function sendVolume(vol, tabId){
 function loadTabSettings(tabId){
   if(!tabId) return;
   currentTabId = tabId;
-  chrome.storage.local.get([
-    `vol_tab_${tabId}`,
-    `mute_tab_${tabId}`,
-    `normalize_tab_${tabId}`
-  ], items => {
-    const saved = items && items[`vol_tab_${tabId}`];
-    const savedMute = items && items[`mute_tab_${tabId}`];
-    const savedNormalize = items && items[`normalize_tab_${tabId}`];
-    if(typeof saved !== 'undefined'){
-      slider.value = saved;
-      updateUI(saved);
-      sendVolume(saved, tabId);
-    }
-    if(typeof savedMute !== 'undefined'){
-      isMuted = !!savedMute;
-      chrome.tabs.sendMessage(tabId,{type:'SET_MUTE',mute:isMuted});
-    }
-    if(typeof savedNormalize !== 'undefined'){
-      isNormalized = !!savedNormalize;
-      chrome.tabs.sendMessage(tabId,{type:'SET_NORMALIZE',normalize:isNormalized});
-    }
-    // if nothing saved for volume/mute/normalize, ask content script
-    if(typeof saved === 'undefined' || typeof savedMute === 'undefined' || typeof savedNormalize === 'undefined'){
-      chrome.tabs.sendMessage(tabId,{type:"GET_VOLUME"},res=>{
-        const vol = res && typeof res.volume !== 'undefined' ? res.volume : 100;
-        if(typeof saved === 'undefined'){ slider.value = vol; updateUI(vol); }
-        if(typeof savedMute === 'undefined') isMuted = res && res.muted ? res.muted : false;
-        if(typeof savedNormalize === 'undefined') isNormalized = res && res.normalized ? res.normalized : false;
-        updateButtons();
-      });
-    } else {
-      updateButtons();
-    }
+  // get tab URL to derive domain key, but fall back to existing tab-based keys
+  chrome.tabs.get(tabId, tab => {
+    let hostname = null;
+    try{ hostname = tab && tab.url ? new URL(tab.url).hostname : null; } catch(e){ hostname = null; }
+    currentDomain = hostname;
+    const domainVolKey = hostname ? `vol_domain_${hostname}` : null;
+    const domainMuteKey = hostname ? `mute_domain_${hostname}` : null;
+    const domainNormalizeKey = hostname ? `normalize_domain_${hostname}` : null;
+    const tabVolKey = `vol_tab_${tabId}`;
+    const tabMuteKey = `mute_tab_${tabId}`;
+    const tabNormalizeKey = `normalize_tab_${tabId}`;
 
-    // load EQ for this tab
-    chrome.storage.local.get([`eq_tab_${tabId}`], items=>{
-      const s = items && items[`eq_tab_${tabId}`];
-      if(s){ eqAlgo.value = s.algorithm || eqAlgo.value; eqFreq.value = s.frequency || eqFreq.value; eqQ.value = s.Q || eqQ.value; eqGain.value = s.gain || eqGain.value; eqFreqVal.textContent = eqFreq.value; eqQVal.textContent = eqQ.value; eqGainVal.textContent = eqGain.value; sendEq(); }
+    const keys = [domainVolKey, tabVolKey, domainMuteKey, tabMuteKey, domainNormalizeKey, tabNormalizeKey].filter(Boolean);
+    chrome.storage.local.get(keys, items => {
+      // prefer domain values over tab-specific values
+      const saved = hostname && items[`vol_domain_${hostname}`] !== undefined ? items[`vol_domain_${hostname}`] : items[tabVolKey];
+      const savedMute = hostname && items[`mute_domain_${hostname}`] !== undefined ? items[`mute_domain_${hostname}`] : items[tabMuteKey];
+      const savedNormalize = hostname && items[`normalize_domain_${hostname}`] !== undefined ? items[`normalize_domain_${hostname}`] : items[tabNormalizeKey];
+
+      if(typeof saved !== 'undefined'){
+        slider.value = saved;
+        updateUI(saved);
+        sendVolume(saved, tabId);
+      }
+      if(typeof savedMute !== 'undefined'){
+        isMuted = !!savedMute;
+        safeSendMessage(tabId,{type:'SET_MUTE',mute:isMuted});
+      }
+      if(typeof savedNormalize !== 'undefined'){
+        isNormalized = !!savedNormalize;
+        safeSendMessage(tabId,{type:'SET_NORMALIZE',normalize:isNormalized});
+      }
+
+      // if nothing saved for volume/mute/normalize, ask content script
+      if(typeof saved === 'undefined' || typeof savedMute === 'undefined' || typeof savedNormalize === 'undefined'){
+        safeSendMessage(tabId,{type:"GET_VOLUME"},(res, err)=>{
+          const vol = res && typeof res.volume !== 'undefined' ? res.volume : 100;
+          if(typeof saved === 'undefined'){ slider.value = vol; updateUI(vol); }
+          if(typeof savedMute === 'undefined') isMuted = res && res.muted ? res.muted : false;
+          if(typeof savedNormalize === 'undefined') isNormalized = res && res.normalized ? res.normalized : false;
+          updateButtons();
+        });
+      } else {
+        updateButtons();
+      }
+
+      // load EQ for this tab (unchanged)
+      chrome.storage.local.get([`eq_tab_${tabId}`], items2=>{
+        const s = items2 && items2[`eq_tab_${tabId}`];
+        if(s){ eqAlgo.value = s.algorithm || eqAlgo.value; eqFreq.value = s.frequency || eqFreq.value; eqQ.value = s.Q || eqQ.value; eqGain.value = s.gain || eqGain.value; eqFreqVal.textContent = eqFreq.value; eqQVal.textContent = eqQ.value; eqGainVal.textContent = eqGain.value; sendEq(); }
+      });
     });
   });
 }
@@ -110,9 +182,20 @@ function populateTabList(){
       const img = document.createElement('img'); img.className='tab-fav'; img.src = tab.favIconUrl || 'icon-48.png'; img.alt = '';
       const title = document.createElement('div'); title.className='tab-title'; title.textContent = tab.title || tab.url || 'Untitled';
       const volSpan = document.createElement('div'); volSpan.className='tab-vol'; volSpan.textContent = '—';
-      // fetch saved volume if any
-      const key = `vol_tab_${tab.id}`;
-      chrome.storage.local.get([key], items=>{ const v = items && items[key]; volSpan.textContent = (typeof v !== 'undefined') ? v + '%' : '—'; });
+      // fetch saved volume if any (prefer domain-saved value)
+      try{
+        const hostname = tab && tab.url ? new URL(tab.url).hostname : null;
+        const domainKey = hostname ? `vol_domain_${hostname}` : null;
+        const tabKey = `vol_tab_${tab.id}`;
+        const keys = [domainKey, tabKey].filter(Boolean);
+        chrome.storage.local.get(keys, items=>{
+          const v = (hostname && items[domainKey] !== undefined) ? items[domainKey] : items[tabKey];
+          volSpan.textContent = (typeof v !== 'undefined') ? v + '%' : '—';
+        });
+      } catch(e){
+        const key = `vol_tab_${tab.id}`;
+        chrome.storage.local.get([key], items=>{ const v = items && items[key]; volSpan.textContent = (typeof v !== 'undefined') ? v + '%' : '—'; });
+      }
       item.appendChild(img); item.appendChild(title); item.appendChild(volSpan);
       item.addEventListener('click', ()=>{
         const prev = list.querySelector('.tab-item.selected'); if(prev) prev.classList.remove('selected');
@@ -147,14 +230,15 @@ muteBtn.addEventListener('click',()=>{
   isMuted = !isMuted;
   updateButtons();
   if(!currentTabId) return;
-  chrome.tabs.sendMessage(currentTabId,{type:'SET_MUTE',mute:isMuted});
-  const key = `mute_tab_${currentTabId}`;
+  safeSendMessage(currentTabId,{type:'SET_MUTE',mute:isMuted});
+  // save by domain when possible so mute persists across tab ids
+  const saveKey = currentDomain ? `mute_domain_${currentDomain}` : `mute_tab_${currentTabId}`;
   if(autosave.checked){
     const payload = {};
-    payload[key] = isMuted;
+    payload[saveKey] = isMuted;
     chrome.storage.local.set(payload);
   } else {
-    chrome.storage.local.remove(key);
+    chrome.storage.local.remove(saveKey);
   }
 });
 
@@ -162,20 +246,20 @@ normalizeBtn.addEventListener('click',()=>{
   isNormalized = !isNormalized;
   updateButtons();
   if(!currentTabId) return;
-  chrome.tabs.sendMessage(currentTabId,{type:'SET_NORMALIZE',normalize:isNormalized});
-  const key = `normalize_tab_${currentTabId}`;
+  safeSendMessage(currentTabId,{type:'SET_NORMALIZE',normalize:isNormalized});
+  const saveKey = currentDomain ? `normalize_domain_${currentDomain}` : `normalize_tab_${currentTabId}`;
   if(autosave.checked){
     const payload = {};
-    payload[key] = isNormalized;
+    payload[saveKey] = isNormalized;
     chrome.storage.local.set(payload);
   } else {
-    chrome.storage.local.remove(key);
+    chrome.storage.local.remove(saveKey);
   }
 });
 
 previewBtn.addEventListener('click',()=>{
   if(!currentTabId) return;
-  chrome.tabs.sendMessage(currentTabId,{type:'PREVIEW_TONE'});
+  safeSendMessage(currentTabId,{type:'PREVIEW_TONE'});
 });
 
 // Keyboard shortcuts: number keys 0-6 map to 0%-600%, arrows adjust by 10%
@@ -226,7 +310,7 @@ darkModeToggle.addEventListener('change', ()=>{
 function sendEq(){
   if(!currentTabId) return;
   const msg = { type: 'SET_BIQUAD_FILTER', algorithm: eqAlgo.value, frequency: Number(eqFreq.value), Q: Number(eqQ.value), gain: Number(eqGain.value) };
-  chrome.tabs.sendMessage(currentTabId, msg);
+  safeSendMessage(currentTabId, msg);
 }
 eqFreq.addEventListener('input', ()=>{ eqFreqVal.textContent = eqFreq.value; sendEq(); });
 eqQ.addEventListener('input', ()=>{ eqQVal.textContent = eqQ.value; sendEq(); });

@@ -141,6 +141,10 @@ chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
 
 // Handle mute, normalize, and preview commands
 chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
+  // ensure audio graph exists and is running so commands take effect
+  init();
+  try{ if(audioContext && audioContext.state === 'suspended') audioContext.resume().catch(()=>{}); }catch(e){}
+
   if(msg.type === 'SET_MUTE'){
     const mute = !!msg.mute;
     isMuted = mute;
@@ -176,7 +180,7 @@ chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
     return;
   }
   if(msg.type === 'PREVIEW_TONE'){
-    init();
+    // init already called above
     try{
       const osc = audioContext.createOscillator();
       const oscGain = audioContext.createGain();
@@ -192,7 +196,7 @@ chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
     return;
   }
   if(msg.type === 'SET_BIQUAD_FILTER'){
-    init();
+    // init already called above
     try{
       // create biquad if not exists
       if(!biquad){
@@ -206,6 +210,7 @@ chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
       if(typeof msg.frequency === 'number') biquad.frequency.value = msg.frequency;
       if(typeof msg.Q === 'number') biquad.Q.value = msg.Q;
       if(typeof msg.gain === 'number') biquad.gain.value = msg.gain;
+      try{ if(audioContext && audioContext.state === 'suspended') audioContext.resume().catch(()=>{}); }catch(e){}
       // save per-tab state not handled here (popup persists it)
       sendResponse({ok:true});
     }catch(e){ sendResponse({ok:false,error:e.message}); }
