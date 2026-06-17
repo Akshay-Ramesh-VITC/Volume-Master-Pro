@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!-- <!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -66,7 +66,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 	<div class="hint">Tip: 100% is normal. Above 100% applies pre-boost + soft clipping.</div>
 </div>
 
-<!-- Settings pane (hidden by default) -->
+Settings pane (hidden by default) 
 <section id="settingsPane" style="display:none;margin-top:12px;padding:10px;border-radius:8px;background:rgba(255,255,255,0.02)">
 	<h3 style="margin:0 0 8px 0">Settings</h3>
 	<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
@@ -94,6 +94,66 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 		</div>
 	</div>
 </section>
+<script src="popup.js"></script>
+</body>
+</html> -->
+
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Volume Master Pro</title>
+<style>
+  body { font-family: Inter, Arial, sans-serif; padding: 16px; width: 320px; background: #0b1220; color: #e6eef8; border-radius: 12px; margin: 0; }
+  .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  h2 { margin: 0; font-size: 16px; display: flex; align-items: center; gap: 8px; }
+  
+  /* Updated Tab List Styles */
+  .tab-list { max-height: 150px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; padding-right: 4px; }
+  .tab-item { display: flex; align-items: center; padding: 8px; border-radius: 6px; background: rgba(255,255,255,0.05); cursor: pointer; transition: 0.2s; gap: 8px; }
+  .tab-item.selected { outline: 2px solid #2563eb; background: rgba(37,99,235,0.2); }
+  .tab-fav { width: 16px; height: 16px; border-radius: 4px; object-fit: contain; }
+  .tab-title { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  .tab-vol { font-size: 12px; font-weight: bold; color: #94a3b8; }
+  
+  .controls { display: flex; flex-direction: column; gap: 12px; }
+  .value-display { font-size: 24px; font-weight: bold; text-align: center; color: #60a5fa; }
+  input[type=range] { width: 100%; cursor: pointer; }
+  .buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  button { padding: 8px; border-radius: 6px; border: none; background: #1e293b; color: #e6eef8; cursor: pointer; font-weight: bold; transition: 0.2s; }
+  button:hover { background: #334155; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .hint { font-size: 11px; color: #94a3b8; text-align: center; margin-top: 8px; }
+  
+  #disabled-msg { display: none; color: #f87171; background: rgba(248,113,113,0.1); padding: 8px; border-radius: 6px; margin-bottom: 12px; text-align: center; font-size: 12px; font-weight: bold; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h2><img src="icon48.png" width="20" style="border-radius:4px;" alt=""> Volume Master Pro</h2>
+  <div style="font-size:12px;">
+    <input type="checkbox" id="autosave" checked> <label for="autosave">Save</label>
+  </div>
+</div>
+
+<div id="disabled-msg">
+  Volume boost is disabled on this site to prevent video breakage.
+</div>
+
+<div id="tabList" class="tab-list"></div>
+
+<div class="controls">
+  <div class="value-display" id="value">100%</div>
+  <input type="range" min="0" max="600" value="100" id="slider">
+  <div class="buttons">
+    <button id="dec">-10%</button>
+    <button id="inc">+10%</button>
+    <button id="reset" style="grid-column: span 2;">Reset to Normal</button>
+  </div>
+  <div class="hint">100% is normal volume. Boosting utilizes a clean peak limiter to preserve audio clarity.</div>
+</div>
+
 <script src="popup.js"></script>
 </body>
 </html>
