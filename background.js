@@ -1,278 +1,176 @@
-// // Background service worker for VolumeMasterPro
-// // Minimal: supports creating an offscreen document and forwarding popup requests
-// const TARGET_SERVICE_WORKER = 'service-worker';
-// const TARGET_OFFSCREEN = 'offscreen-document';
-// const ACTION_INIT_OFFSCREEN_DOCUMENT = 'init-offscreen-document';
-// const ACTION_POPUP_GAIN_CHANGE = 'popup-gain-change';
-// const ACTION_POPUP_BIQUAD_FILTER_CHANGE = 'popup-biquad-filter-change';
-// const ACTION_TAB_CLOSED = 'tab-closed';
+// background.js - Service Worker for Volume Master Pro
 
-// async function hasOffscreenDoc() {
-// 	// modern Chrome exposes chrome.runtime.getContexts
-// 	if ('getContexts' in chrome.runtime) {
-// 		try {
-// 			const url = chrome.runtime.getURL('offscreen.html');
-// 			const contexts = await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'], documentUrls: [url] });
-// 			return Array.isArray(contexts) && contexts.length > 0;
-// 		} catch (e) {
-// 			return false;
-// 		}
-// 	}
-// 	// fallback: check clients (service worker environment)
-// 	try {
-// 		const all = await clients.matchAll();
-// 		return all.some(c => c.url && c.url.includes('offscreen.html'));
-// 	} catch (e) {
-// 		return false;
-// 	}
-// }
+const capturedTabs = new Set();
+const tabVolumes = new Map();
+let isOffscreenCreating = false;
 
-// async function ensureOffscreen() {
-// 	if (!chrome.offscreen || !chrome.offscreen.createDocument) return;
-// 	const exists = await hasOffscreenDoc();
-// 	if (exists) return;
-// 	try {
-// 		await chrome.offscreen.createDocument({ url: 'offscreen.html', reasons: ['USER_MEDIA'], justification: 'Capture MediaStream (audio only) for processing' });
-// 	} catch (e) {
-// 		// Not fatal — some platforms or Chrome versions may not support offscreen.
-// 		console.warn('offscreen.createDocument failed:', e && e.message ? e.message : e);
-// 	}
-// }
-
-// // Listen for messages from popup/content to handle offscreen and forwarding
-// chrome.runtime.onMessage.addListener(async (msg, sender) => {
-// 	try {
-// 		if (!msg || msg.target !== TARGET_SERVICE_WORKER) return;
-
-// 		if (msg.action === ACTION_INIT_OFFSCREEN_DOCUMENT) {
-// 			await ensureOffscreen();
-// 			return;
-// 		}
-
-// 		if (msg.action === ACTION_POPUP_GAIN_CHANGE || msg.action === ACTION_POPUP_BIQUAD_FILTER_CHANGE) {
-// 			// Try to obtain a mediaStreamId for the tab (best-effort)
-// 			let mediaStreamId = null;
-// 			try {
-// 				if (chrome.tabCapture && chrome.tabCapture.getMediaStreamId) {
-// 					const res = await chrome.tabCapture.getMediaStreamId({ targetTabId: msg.tabId });
-// 					mediaStreamId = res && res.streamId ? res.streamId : res;
-// 				}
-// 			} catch (e) {
-// 				// ignore
-// 			}
-
-// 			await ensureOffscreen();
-// 			// Forward the request to the offscreen document/service (if present)
-// 			const forward = {
-// 				action: msg.action,
-// 				target: TARGET_OFFSCREEN,
-// 				tabId: msg.tabId,
-// 				mediaStreamId
-// 			};
-// 			if (msg.volumeValue !== undefined) forward.volumeValue = msg.volumeValue;
-// 			if (msg.algorithm !== undefined) forward.algorithm = msg.algorithm;
-// 			if (msg.frequency !== undefined) forward.frequency = msg.frequency;
-// 			if (msg.q !== undefined) forward.q = msg.q;
-// 			if (msg.gain !== undefined) forward.gain = msg.gain;
-
-// 			// sendMessage may return a Promise that rejects if no receiver exists
-// 			// handle both promise and callback styles to avoid unhandled rejections
-// 			try {
-// 				const maybePromise = chrome.runtime.sendMessage(forward, (resp) => {
-// 					if (chrome.runtime.lastError) {
-// 						console.warn('Forward to offscreen no receiver (callback):', chrome.runtime.lastError.message);
-// 					}
-// 				});
-// 				if (maybePromise && typeof maybePromise.then === 'function') {
-// 					maybePromise.catch(e => {
-// 						console.warn('Forward to offscreen failed (promise):', e && e.message ? e.message : e);
-// 					});
-// 				}
-// 			} catch (e) {
-// 				console.warn('Forward to offscreen failed (sync):', e && e.message ? e.message : e);
-// 			}
-// 		}
-// 	} catch (outer) {
-// 		console.error('background message handler error', outer);
-// 	}
-// });
-
-// // Notify offscreen when a tab closes
-// chrome.tabs.onRemoved.addListener(async (tabId) => {
-// 	try {
-// 		await ensureOffscreen();
-// 		// runtime.sendMessage can reject if no receiver exists; handle gracefully
-// 		try {
-// 			const maybePromise = chrome.runtime.sendMessage({ action: ACTION_TAB_CLOSED, target: TARGET_OFFSCREEN, tabId }, (resp) => {
-// 				if (chrome.runtime.lastError) {
-// 					// nothing to do if offscreen isn't present
-// 				}
-// 			});
-// 			if (maybePromise && typeof maybePromise.then === 'function') {
-// 				maybePromise.catch(()=>{});
-// 			}
-// 		} catch (e) {
-// 			// ignore failures
-// 		}
-// 	} catch (e) {
-// 		// ignore
-// 	}
-// });
-const slider = document.getElementById("slider");
-const valueDisplay = document.getElementById("value");
-const incBtn = document.getElementById("inc");
-const decBtn = document.getElementById("dec");
-const resetBtn = document.getElementById("reset");
-const autosave = document.getElementById("autosave");
-const tabList = document.getElementById("tabList");
-const disabledMsg = document.getElementById("disabled-msg");
-
-let currentTabId = null;
-
-// Add any sites that break here (lowercase)
-const EXCLUDED_SITES = ["magoosh.com", "netflix.com"]; 
-
-function isExcluded(url) {
-  if (!url) return false;
-  return EXCLUDED_SITES.some(site => url.toLowerCase().includes(site));
-}
-
-function updateUI(vol) {
-  valueDisplay.textContent = vol + "%";
-  slider.value = vol;
-}
-
-function setControlsDisabled(disabled) {
-  slider.disabled = disabled;
-  incBtn.disabled = disabled;
-  decBtn.disabled = disabled;
-  resetBtn.disabled = disabled;
-  slider.style.opacity = disabled ? '0.5' : '1';
-  disabledMsg.style.display = disabled ? 'block' : 'none';
-}
-
-function sendVolume(vol, tabId) {
-  const sendTo = tabId || currentTabId;
-  if (!sendTo) return;
-
-  chrome.runtime.sendMessage({
-    action: 'set-volume',
-    tabId: sendTo,
-    volume: Number(vol)
-  });
-
-  if (autosave.checked) {
-    chrome.storage.local.set({ [`vol_tab_${sendTo}`]: Number(vol) });
-  }
-
-  // Update the volume text visually in the list right away
-  const activeVolText = document.querySelector(`.tab-item[data-tab-id="${sendTo}"] .tab-vol`);
-  if (activeVolText) {
-    activeVolText.textContent = vol + '%';
-    activeVolText.style.color = vol > 100 ? '#60a5fa' : '#94a3b8'; // Highlight if boosted
-  }
-}
-
-function loadTabSettings(tabId) {
-  if (!tabId) return;
-  currentTabId = tabId;
+async function ensureOffscreen() {
+  if (!chrome.offscreen || !chrome.offscreen.createDocument) return;
   
-  chrome.tabs.get(tabId, (tab) => {
-    if (tab && isExcluded(tab.url)) {
-      setControlsDisabled(true);
-      updateUI(100);
-      return;
-    } else {
-      setControlsDisabled(false);
+  try {
+    const contexts = await chrome.runtime.getContexts({
+      contextTypes: ['OFFSCREEN_DOCUMENT'],
+      documentUrls: [chrome.runtime.getURL('offscreen.html')]
+    });
+    if (contexts.length > 0) return;
+  } catch (e) {
+    // Fallback for older extension APIs
+  }
+
+  if (isOffscreenCreating) return;
+  isOffscreenCreating = true;
+
+  try {
+    await chrome.offscreen.createDocument({
+      url: 'offscreen.html',
+      reasons: ['USER_MEDIA'],
+      justification: 'Capture tab MediaStream for clean volume processing'
+    });
+  } catch (e) {
+    if (!e.message.includes('Only a single offscreen document may be created')) {
+      console.warn('[VMP Background] offscreen.createDocument warning:', e.message);
+    }
+  } finally {
+    isOffscreenCreating = false;
+  }
+}
+
+// Handle native tab mute updates (from browser tab bar)
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.mutedInfo !== undefined) {
+    const isMuted = changeInfo.mutedInfo.muted;
+    chrome.runtime.sendMessage({
+      target: 'offscreen',
+      action: 'SET_NATIVE_MUTE',
+      tabId,
+      mute: isMuted
+    }).catch(() => {});
+  }
+});
+
+// Central Router for Extension Communication
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || msg.target === 'offscreen') return;
+
+  if (msg.action === 'set-volume') {
+    const { tabId, volume } = msg;
+    tabVolumes.set(tabId, volume);
+
+    // If already captured by offscreen, update immediately
+    if (capturedTabs.has(tabId)) {
+      chrome.runtime.sendMessage({
+        target: 'offscreen',
+        action: 'set-volume',
+        tabId,
+        volume
+      }).catch(() => {});
+      sendResponse({ ok: true });
+      return false;
+    }
+
+    // Initialize capture on offscreen document
+    ensureOffscreen().then(() => {
+      if (!chrome.tabCapture || !chrome.tabCapture.getMediaStreamId) {
+        console.warn('[VMP Background] tabCapture API unavailable');
+        sendResponse({ ok: false, error: 'tabCapture API unavailable' });
+        return;
+      }
+
+      chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (streamId) => {
+        if (chrome.runtime.lastError || !streamId) {
+          console.warn('[VMP Background] getMediaStreamId failed:', chrome.runtime.lastError?.message);
+          sendResponse({ ok: false, error: chrome.runtime.lastError?.message });
+          return;
+        }
+
+        chrome.tabs.get(tabId, (tab) => {
+          const nativeMute = tab && tab.mutedInfo ? tab.mutedInfo.muted : false;
+          
+          chrome.runtime.sendMessage({
+            target: 'offscreen',
+            action: 'start-capture',
+            tabId,
+            streamId,
+            volume,
+            nativeMute
+          }).then(() => {
+            capturedTabs.add(tabId);
+          }).catch((err) => {
+            console.warn('[VMP Background] start-capture message failed:', err);
+          });
+        });
+      });
+    });
+
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  if (msg.action === 'get-volume') {
+    const { tabId } = msg;
+    const cachedVol = tabVolumes.get(tabId);
+
+    if (cachedVol !== undefined) {
+      sendResponse({ volume: cachedVol });
+      return false;
     }
 
     chrome.storage.local.get([`vol_tab_${tabId}`], (items) => {
-      let saved = items[`vol_tab_${tabId}`];
-      
-      chrome.runtime.sendMessage({ action: 'get-volume', tabId }, (res) => {
-        const activeVol = res && res.volume !== 100 ? res.volume : saved;
-        const volToApply = activeVol || 100;
-        
-        updateUI(volToApply);
-        if (volToApply !== 100) sendVolume(volToApply, tabId);
-      });
+      const savedVol = items[`vol_tab_${tabId}`] || 100;
+      tabVolumes.set(tabId, savedVol);
+      sendResponse({ volume: savedVol });
     });
-  });
-}
+    return true;
+  }
 
-function populateTabList() {
-  tabList.innerHTML = '';
-  chrome.tabs.query({ currentWindow: true }, tabs => {
-    const visibleTabs = tabs.filter(tab => tab.url && /^(https?:)/.test(tab.url));
-    
-    visibleTabs.forEach(tab => {
-      const item = document.createElement('div');
-      item.className = 'tab-item';
-      item.dataset.tabId = tab.id;
-      
-      // 1. Add Website Logo (Favicon)
-      const img = document.createElement('img');
-      img.className = 'tab-fav';
-      img.src = tab.favIconUrl || 'icon16.png'; // Fallback to extension icon if none exists
-      
-      // 2. Add Website Title
-      const title = document.createElement('div');
-      title.className = 'tab-title';
-      title.textContent = tab.title || tab.url;
-      
-      // 3. Add Volume Indicator
-      const volSpan = document.createElement('div');
-      volSpan.className = 'tab-vol';
-      volSpan.textContent = '100%'; // Default visual
-      
-      // Query the background script for this specific tab's current volume
-      chrome.runtime.sendMessage({ action: 'get-volume', tabId: tab.id }, (res) => {
-        if (res && res.volume) {
-          volSpan.textContent = res.volume + '%';
-          if (res.volume > 100) volSpan.style.color = '#60a5fa'; // Make text blue if boosted
-        }
-      });
-      
-      // Append everything to the row
-      item.appendChild(img);
-      item.appendChild(title);
-      item.appendChild(volSpan);
-      
-      item.addEventListener('click', () => {
-        const prev = tabList.querySelector('.tab-item.selected');
-        if (prev) prev.classList.remove('selected');
-        item.classList.add('selected');
-        loadTabSettings(tab.id);
-      });
-      
-      tabList.appendChild(item);
-      if (tab.active) {
-        item.classList.add('selected');
-        loadTabSettings(tab.id);
-      }
-    });
-  });
-}
+  if (msg.action === 'set-eq') {
+    const { tabId, algorithm, frequency, q, gain } = msg;
+    chrome.runtime.sendMessage({
+      target: 'offscreen',
+      action: 'set-eq',
+      tabId,
+      algorithm,
+      frequency,
+      q,
+      gain
+    }).catch(() => {});
+    sendResponse({ ok: true });
+    return false;
+  }
 
-// Event Listeners
-slider.addEventListener("input", () => {
-  const vol = Number(slider.value);
-  updateUI(vol);
-  sendVolume(vol);
+  if (msg.action === 'set-noise-suppression') {
+    const { tabId, enabled } = msg;
+    chrome.runtime.sendMessage({
+      target: 'offscreen',
+      action: 'set-noise-suppression',
+      tabId,
+      enabled
+    }).catch(() => {});
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  if (msg.action === 'set-mute') {
+    const { tabId, mute } = msg;
+    chrome.runtime.sendMessage({
+      target: 'offscreen',
+      action: 'set-mute',
+      tabId,
+      mute
+    }).catch(() => {});
+    sendResponse({ ok: true });
+    return false;
+  }
 });
 
-incBtn.addEventListener("click", () => { 
-  const newVol = Math.min(600, Number(slider.value) + 10);
-  updateUI(newVol); sendVolume(newVol); 
+// Clean up when a tab is closed
+chrome.tabs.onRemoved.addListener((tabId) => {
+  capturedTabs.delete(tabId);
+  tabVolumes.delete(tabId);
+  chrome.runtime.sendMessage({
+    target: 'offscreen',
+    action: 'stop-capture',
+    tabId
+  }).catch(() => {});
 });
-
-decBtn.addEventListener("click", () => { 
-  const newVol = Math.max(0, Number(slider.value) - 10);
-  updateUI(newVol); sendVolume(newVol); 
-});
-
-resetBtn.addEventListener("click", () => { 
-  updateUI(100); sendVolume(100); 
-});
-
-populateTabList();
+
